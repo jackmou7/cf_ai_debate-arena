@@ -7,10 +7,12 @@
 	"name": "debate-arena",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-11-19",
+	
+	// Setup the Database Migration for the Durable Object
 	"migrations": [
 		{
 			"new_sqlite_classes": [
-				"MyDurableObject"
+				"ChatRoom"  // Changed from default
 			],
 			"tag": "v1"
 		}
@@ -18,11 +20,23 @@
 	"durable_objects": {
 		"bindings": [
 			{
-				"class_name": "MyDurableObject",
-				"name": "MY_DURABLE_OBJECT"
+				"class_name": "ChatRoom",  // Changed from default
+				"name": "CHAT_ROOM"
 			}
 		]
 	},
+	// Bind Workers AI (Llama 3.3)
+	"ai": {
+		"binding": "AI"
+	},
+	// Bind Workflows (to allow for back and forth-debate)
+	"workflows": [
+		{
+		"name": "debate-workflow",
+		"binding": "DEBATE_WORKFLOW",
+		"class_name": "DebateWorkflow",
+		}
+	],
 	"observability": {
 		"enabled": true
 	}

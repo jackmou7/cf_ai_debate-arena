@@ -1,64 +1,219 @@
-import { DurableObject } from "cloudflare:workers";
+// src/index.ts
+import { ChatRoom } from "./ChatRoom";
+import { DebateWorkflow } from "./DebateWorkflow";
 
-/**
- * Welcome to Cloudflare Workers! This is your first Durable Objects application.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your Durable Object in action
- * - Run `npm run deploy` to publish your application
- *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/durable-objects
- */
+export { ChatRoom, DebateWorkflow };
 
-/** A Durable Object's behavior is defined in an exported Javascript class */
-export class MyDurableObject extends DurableObject<Env> {
-	/**
-	 * The constructor is invoked once upon creation of the Durable Object, i.e. the first call to
-	 * 	`DurableObjectStub::get` for a given identifier (no-op constructors can be omitted)
-	 *
-	 * @param ctx - The interface for interacting with Durable Object state
-	 * @param env - The interface to reference bindings declared in wrangler.jsonc
-	 */
-	constructor(ctx: DurableObjectState, env: Env) {
-		super(ctx, env);
-	}
+// --- THE UI CODE ---
+const HTML = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Debate Arena</title>
+  <style>
+    :root {
+      --bg: #181818;
+      --card: #181818;
+      --text: #e2e8f0;
+      --accent: #FF5722;
+      --agent-a: #3b82f6; /* Blue */
+      --agent-b: #ef4444; /* Red */
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      padding: 1rem;
+      background: var(--bg);
+      border-bottom: 1px solid #6b6b6b;
+      text-align: center;
+      backdrop-filter: blur(10px);
+      z-index: 10;
+    }
+    h1 { margin: 0; font-size: 1.75rem; letter-spacing: 1px; text-transform: uppercase; }
+    
+    #chat-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      scroll-behavior: smooth;
+    }
 
-	/**
-	 * The Durable Object exposes an RPC method sayHello which will be invoked when when a Durable
-	 *  Object instance receives a request from a Worker via the same method invocation on the stub
-	 *
-	 * @param name - The name provided to a Durable Object instance from a Worker
-	 * @returns The greeting to be sent back to the Worker
-	 */
-	async sayHello(name: string): Promise<string> {
-		return `Hello, ${name}!`;
-	}
-}
+    .message {
+      max-width: 80%;
+      padding: 1rem;
+      border-radius: 12px;
+      line-height: 1.5;
+      opacity: 0;
+      transform: translateY(20px);
+      animation: popIn 0.5s forwards ease-out;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    .agent-a { align-self: flex-start; border-left: 4px solid var(--agent-a); background: #1e293b; }
+    .agent-b { align-self: flex-end; border-right: 4px solid var(--agent-b); background: #2a2a2a; text-align: right;}
+    .system { align-self: center; background: transparent; color: var(--text); font-size: 0.8rem; border: 1px solid #6b6b6b; }
+
+    .sender-name {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      margin-bottom: 0.5rem;
+      font-weight: bold;
+      color: var(--text);
+    }
+
+    @keyframes popIn {
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    #controls {
+      padding: 1.5rem;
+      background: var(--card);
+      display: flex;
+      gap: 1rem;
+      border-top: 1px solid #6b6b6b;
+    }
+
+    input {
+      flex: 1;
+      padding: 1rem;
+      border-radius: 8px;
+      border: 1px solid #6b6b6b;
+      background: var(--bg);
+      color: white;
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: #dedede; }
+
+    button {
+      padding: 0 2rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.9; }
+    button:disabled { background: #475569; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⚡ Debate Arena ⚡</h1>
+  </header>
+
+  <div id="chat-container">
+    <div class="message system">Waiting for connection...</div>
+  </div>
+
+  <div id="controls">
+    <input type="text" id="topicInput" placeholder="Enter a controversial topic (e.g., Cats vs Dogs)..." autocomplete="off">
+    <button id="sendBtn">Start Debate</button>
+  </div>
+
+  <script>
+    const chat = document.getElementById('chat-container');
+    const input = document.getElementById('topicInput');
+    const btn = document.getElementById('sendBtn');
+    
+    // Auto-connect to the WebSocket on the same host
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = \`\${protocol}//\${window.location.host}/websocket\`;
+    let ws;
+
+    function connect() {
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        addMessage("System", "Connected! Enter a topic to start.", "system");
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        // Handle history (array) or single message
+        if (data.type === 'history') {
+            data.data.forEach(msg => addMessage(msg.sender, msg.text));
+        } else {
+            // Determine style based on sender name
+            let style = "system";
+            if (data.sender === "Agent A") style = "agent-a";
+            if (data.sender === "Agent B") style = "agent-b";
+            
+            addMessage(data.sender, data.text, style);
+        }
+      };
+
+      ws.onclose = () => {
+        addMessage("System", "Disconnected. Reconnecting...", "system");
+        setTimeout(connect, 2000);
+      };
+    }
+
+    function addMessage(sender, text, type) {
+      if(!text) return;
+      const div = document.createElement('div');
+      div.className = \`message \${type || ''}\`;
+      div.innerHTML = \`
+        <div class="sender-name">\${sender || 'Unknown'}</div>
+        <div>\${text}</div>
+      \`;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    btn.addEventListener('click', () => {
+      const topic = input.value.trim();
+      if (!topic) return;
+      
+      // Send to Backend
+      ws.send(JSON.stringify({ type: 'start_debate', topic: topic }));
+      
+      addMessage("You", \`Topic Proposed: \${topic}\`, "system");
+      input.value = '';
+    });
+
+    input.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') btn.click();
+    });
+
+    connect();
+  </script>
+</body>
+</html>
+`;
 
 export default {
-	/**
-	 * This is the standard fetch handler for a Cloudflare Worker
-	 *
-	 * @param request - The request submitted to the Worker from the client
-	 * @param env - The interface to reference bindings declared in wrangler.jsonc
-	 * @param ctx - The execution context of the Worker
-	 * @returns The response to be sent back to the client
-	 */
-	async fetch(request, env, ctx): Promise<Response> {
-		// Create a stub to open a communication channel with the Durable Object
-		// instance named "foo".
-		//
-		// Requests from all Workers to the Durable Object instance named "foo"
-		// will go to a single remote Durable Object instance.
-		const stub = env.MY_DURABLE_OBJECT.getByName("foo");
+  async fetch(request: Request, env: Env) {
+    const url = new URL(request.url);
+    
+    // 1. Serve the UI if hitting the root URL
+    if (url.pathname === "/") {
+      return new Response(HTML, {
+        headers: { "Content-Type": "text/html" }
+      });
+    }
 
-		// Call the `sayHello()` RPC method on the stub to invoke the method on
-		// the remote Durable Object instance.
-		const greeting = await stub.sayHello("world");
+    // 2. Otherwise, send traffic to the ChatRoom Durable Object
+    const id = env.CHAT_ROOM.idFromName("global-debate-room");
+    const stub = env.CHAT_ROOM.get(id);
 
-		return new Response(greeting);
-	},
-} satisfies ExportedHandler<Env>;
+    return stub.fetch(request);
+  }
+};
