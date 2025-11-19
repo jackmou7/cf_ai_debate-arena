@@ -11,10 +11,13 @@
 	// Setup the Database Migration for the Durable Object
 	"migrations": [
 		{
-			"new_sqlite_classes": [
-				"ChatRoom"  // Changed from default
-			],
-			"tag": "v1"
+			"tag": "v2",
+			"renamed_classes": [
+        {
+          "from": "MyDurableObject",
+          "to": "ChatRoom"
+        }
+      ],
 		}
 	],
 	"durable_objects": {

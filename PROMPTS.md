@@ -12,3 +12,5 @@ https://developers.cloudflare.com/agents/ (Gemini 3 Pro Preview)
 
 2. Design a a simple aesthetic UI with animations for me (Gemini 3 Pro Preview)
 * I then tweak the UI manually
+
+3. Some vibe-coding debugging prompts (Gemini 3 Pro Preview) 

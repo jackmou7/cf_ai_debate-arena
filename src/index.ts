@@ -63,7 +63,18 @@ const HTML = `
     }
 
     .agent-a { align-self: flex-start; border-left: 4px solid var(--agent-a); background: #1e293b; }
-    .agent-b { align-self: flex-end; border-right: 4px solid var(--agent-b); background: #2a2a2a; text-align: right;}
+    
+    .agent-b { 
+      align-self: flex-end; 
+      border-right: 4px solid var(--agent-b); 
+      background: #2a2a2a; 
+      text-align: left;
+    }
+    .agent-b .sender-name {
+      text-align: right;
+      display: block;
+    }
+    
     .system { align-self: center; background: transparent; color: var(--text); font-size: 0.8rem; border: 1px solid #6b6b6b; }
 
     .sender-name {
@@ -111,7 +122,39 @@ const HTML = `
     }
     button:hover { opacity: 0.9; }
     button:disabled { background: #475569; cursor: not-allowed; }
+
+    .markdown-content p { margin: 0 0 8px 0; }
+    .markdown-content p:last-child { margin: 0; }
+    .markdown-content strong { color: var(--accent); font-weight: 700; }
+    .markdown-content ul { padding-left: 20px; margin: 0; }
+    .markdown-content li { margin-bottom: 4px; }
+
+    /* --- NEW: TYPING ANIMATION STYLES --- */
+    .typing {
+      display: flex;
+      gap: 5px;
+      padding: 1rem;
+      border-radius: 12px;
+      width: fit-content;
+      align-items: center;
+      min-height: 24px;
+    }
+    .typing span {
+      width: 8px;
+      height: 8px;
+      background: #aaaaaa;
+      border-radius: 50%;
+      animation: bounce 1.4s infinite ease-in-out both;
+    }
+    .typing span:nth-child(1) { animation-delay: -0.32s; }
+    .typing span:nth-child(2) { animation-delay: -0.16s; }
+    
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1); }
+    }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
   <header>
@@ -119,51 +162,87 @@ const HTML = `
   </header>
 
   <div id="chat-container">
-    <div class="message system">Waiting for connection...</div>
+    <div class="message system">Initializing unique room...</div>
   </div>
 
   <div id="controls">
-    <input type="text" id="topicInput" placeholder="Enter a controversial topic (e.g., Cats vs Dogs)..." autocomplete="off">
-    <button id="sendBtn">Start Debate</button>
+    <input type="text" id="topicInput" placeholder="Enter a controversial topic..." autocomplete="off">
+    <button id="sendBtn">Message</button>
   </div>
 
   <script>
     const chat = document.getElementById('chat-container');
     const input = document.getElementById('topicInput');
     const btn = document.getElementById('sendBtn');
+    let typingElement = null; // Track the bubble
     
-    // Auto-connect to the WebSocket on the same host
+    // Generate a random session ID so each visitor gets a unique room
+    // that survives page refreshes.
+    let sessionId = localStorage.getItem("debate_session_id");
+    if (!sessionId) {
+        sessionId = Math.random().toString(36).substring(2, 15);
+        localStorage.setItem("debate_session_id", sessionId);
+    }
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = \`\${protocol}//\${window.location.host}/websocket\`;
+    const wsUrl = \`\${protocol}//\${window.location.host}/websocket?room=\${sessionId}\`;
     let ws;
 
     function connect() {
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        addMessage("System", "Connected! Enter a topic to start.", "system");
+        addMessage("System", "Connected! ID: " + sessionId, "system");
       };
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         
-        // Handle history (array) or single message
+        // 1. Always remove typing indicator when new data arrives
+        removeTyping();
+
         if (data.type === 'history') {
+            // Clear the initial "Initializing" message if history exists
+            if(data.data.length > 0) chat.innerHTML = ''; 
             data.data.forEach(msg => addMessage(msg.sender, msg.text));
-        } else {
-            // Determine style based on sender name
+        } 
+        else if (data.type === 'typing') {
+            // 2. Show typing indicator
+            showTyping(data.sender);
+        }
+        else {
+            // 3. Show real message
             let style = "system";
             if (data.sender === "Agent A") style = "agent-a";
             if (data.sender === "Agent B") style = "agent-b";
-            
             addMessage(data.sender, data.text, style);
         }
       };
 
       ws.onclose = () => {
-        addMessage("System", "Disconnected. Reconnecting...", "system");
         setTimeout(connect, 2000);
       };
+    }
+
+    function showTyping(sender) {
+      removeTyping(); // Prevent duplicates
+      typingElement = document.createElement('div');
+      
+      let alignClass = "system";
+      if (sender === "Agent A") alignClass = "agent-a";
+      if (sender === "Agent B") alignClass = "agent-b";
+      
+      typingElement.className = \`typing \${alignClass}\`;
+      typingElement.innerHTML = \`<span></span><span></span><span></span>\`;
+      chat.appendChild(typingElement);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function removeTyping() {
+      if (typingElement) {
+        typingElement.remove();
+        typingElement = null;
+      }
     }
 
     function addMessage(sender, text, type) {
@@ -172,7 +251,7 @@ const HTML = `
       div.className = \`message \${type || ''}\`;
       div.innerHTML = \`
         <div class="sender-name">\${sender || 'Unknown'}</div>
-        <div>\${text}</div>
+        <div class="markdown-content">\${marked.parse(text)}</div>
       \`;
       chat.appendChild(div);
       chat.scrollTop = chat.scrollHeight;
@@ -181,11 +260,7 @@ const HTML = `
     btn.addEventListener('click', () => {
       const topic = input.value.trim();
       if (!topic) return;
-      
-      // Send to Backend
       ws.send(JSON.stringify({ type: 'start_debate', topic: topic }));
-      
-      addMessage("You", \`Topic Proposed: \${topic}\`, "system");
       input.value = '';
     });
 
@@ -203,15 +278,15 @@ export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
     
-    // 1. Serve the UI if hitting the root URL
     if (url.pathname === "/") {
       return new Response(HTML, {
         headers: { "Content-Type": "text/html" }
       });
     }
 
-    // 2. Otherwise, send traffic to the ChatRoom Durable Object
-    const id = env.CHAT_ROOM.idFromName("global-debate-room");
+    // Use the room ID from the URL (unique per visitor)
+    const roomName = url.searchParams.get("room") || "global-default";
+    const id = env.CHAT_ROOM.idFromName(roomName);
     const stub = env.CHAT_ROOM.get(id);
 
     return stub.fetch(request);

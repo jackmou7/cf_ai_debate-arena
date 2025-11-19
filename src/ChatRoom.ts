@@ -33,13 +33,27 @@ export class ChatRoom extends DurableObject {
     webSocket.send(JSON.stringify({ type: 'history', data: this.history }));
 
     webSocket.addEventListener("message", async (event) => {
-      const msg = JSON.parse(event.data as string);
-      if (msg.type === 'start_debate') {
-        // Trigger the debate Workflow
-        await this.env.DEBATE_WORKFLOW.create({
-          params: { topic: msg.topic, roomId: this.ctx.id.toString() }
-        });
-      }
+       const msg = JSON.parse(event.data as string);
+       
+       if (msg.type === 'start_debate') {
+           // 1. Add User's input to history immediately so it shows up
+           const userMsg = { sender: "User", text: msg.topic };
+           this.history.push(userMsg);
+           this.broadcast(JSON.stringify(userMsg));
+
+           // 2. Grab recent history (Context)
+           // We take the last 6 messages so the input prompt doesn't get too huge
+           const context = this.history.slice(-6);
+
+           // 3. Trigger Workflow with history
+           await this.env.DEBATE_WORKFLOW.create({
+               params: { 
+                   topic: msg.topic, 
+                   roomId: this.ctx.id.toString(),
+                   history: context // <--- PASSING MEMORY
+               }
+           });
+       }
     });
     webSocket.addEventListener("close", () => this.sockets.delete(webSocket));
   }
